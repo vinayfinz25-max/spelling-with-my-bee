@@ -62,6 +62,24 @@ describe("roomService", () => {
     ]);
   });
 
+  it("starts anonymous sign-in when no auth session exists yet", async () => {
+    const client = createFakeRoomClient({
+      currentUserError: { message: "Auth session missing!" }
+    });
+
+    const result = await createTroopRoom(
+      { nickname: "Vinay" },
+      {
+        client,
+        createPuzzle: () => testPuzzle,
+        generateCode: () => "HIVE7"
+      }
+    );
+
+    expect(result.roomCode).toBe("HIVE7");
+    expect(client.authCalls).toEqual(["getUser", "signInAnonymously"]);
+  });
+
   it("retries room creation when a generated code already exists", async () => {
     const client = createFakeRoomClient({
       duplicateCodes: new Set(["BEE42"])
@@ -72,7 +90,10 @@ describe("roomService", () => {
       {
         client,
         createPuzzle: () => testPuzzle,
-        generateCode: vi.fn().mockReturnValueOnce("BEE42").mockReturnValue("HIVE7")
+        generateCode: vi
+          .fn()
+          .mockReturnValueOnce("BEE42")
+          .mockReturnValue("HIVE7")
       }
     );
 
@@ -120,25 +141,40 @@ describe("roomService", () => {
 });
 
 interface FakeRoomClientOptions {
+  readonly currentUserError?: {
+    readonly code?: string;
+    readonly message: string;
+  };
   readonly duplicateCodes?: Set<string>;
 }
 
 function createFakeRoomClient(options: FakeRoomClientOptions = {}) {
   const calls: { payload: unknown; table: string; type: string }[] = [];
+  const authCalls: string[] = [];
 
   return {
+    authCalls,
     calls,
     auth: {
-      getUser: () =>
-        Promise.resolve({
-        data: { user: { id: "user-1" } },
-        error: null
-      }),
-      signInAnonymously: () =>
-        Promise.resolve({
-        data: { user: { id: "user-1" } },
-        error: null
-        })
+      getUser: () => {
+        authCalls.push("getUser");
+
+        return Promise.resolve({
+          data: {
+            user:
+              options.currentUserError === undefined ? { id: "user-1" } : null
+          },
+          error: options.currentUserError ?? null
+        });
+      },
+      signInAnonymously: () => {
+        authCalls.push("signInAnonymously");
+
+        return Promise.resolve({
+          data: { user: { id: "user-1" } },
+          error: null
+        });
+      }
     },
     from: (table: string) => ({
       insert: (payload: Record<string, unknown>) => {
@@ -171,8 +207,11 @@ function createFakeRoomClient(options: FakeRoomClientOptions = {}) {
         eq: (_column: string, value: unknown) => ({
           maybeSingle: () =>
             Promise.resolve({
-            data: { code: typeof value === "string" ? value : "", id: "room-1" },
-            error: null
+              data: {
+                code: typeof value === "string" ? value : "",
+                id: "room-1"
+              },
+              error: null
             })
         })
       }),

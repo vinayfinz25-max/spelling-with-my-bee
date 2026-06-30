@@ -220,7 +220,7 @@ async function getAnonymousUser(
 ): Promise<SupabaseUser> {
   const currentUser = await client.auth.getUser();
 
-  if (currentUser.error !== null) {
+  if (currentUser.error !== null && !isMissingAuthSession(currentUser.error)) {
     throw new RoomServiceError("supabase-auth", currentUser.error.message);
   }
 
@@ -238,6 +238,10 @@ async function getAnonymousUser(
   }
 
   return anonymousUser.data.user;
+}
+
+function isMissingAuthSession(error: SupabaseError): boolean {
+  return error.message.toLowerCase().includes("auth session missing");
 }
 
 async function insertRoom(
