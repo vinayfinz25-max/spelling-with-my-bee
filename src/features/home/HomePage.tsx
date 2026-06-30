@@ -37,9 +37,6 @@ export default function HomePage() {
             initial={{ opacity: 0, y: 12 }}
             transition={{ duration: 0.35, ease: "easeOut" }}
           >
-            <p className="text-sm font-bold uppercase tracking-wide text-blue-accent">
-              Private word play
-            </p>
             <h1 className="max-w-3xl text-5xl font-black leading-tight tracking-normal text-primary-text sm:text-6xl">
               Spelling with my bee
             </h1>
@@ -89,7 +86,7 @@ export default function HomePage() {
             className="min-h-12 w-full rounded-lg border border-border bg-background px-4 text-base text-primary-text outline-none transition focus:border-blue-accent focus:ring-2 focus:ring-blue-accent/30"
             id="nickname"
             maxLength={24}
-            placeholder="Honey Ace"
+            placeholder="aish"
             value={nickname}
             onChange={(event) => {
               setNickname(event.target.value);
