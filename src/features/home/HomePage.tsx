@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { useState } from "react";
+import { useNavigate } from "react-router";
 
 import { appRoutes } from "../../app/routes";
 import { PrimaryButton } from "../../components/PrimaryButton";
@@ -20,12 +21,32 @@ const modeLinks = [
 ] as const;
 
 export default function HomePage() {
+  const navigate = useNavigate();
   const storedNickname = usePreferencesStore((state) => state.nickname);
   const setStoredNickname = usePreferencesStore((state) => state.setNickname);
   const [nickname, setNickname] = useState(storedNickname);
+  const [didSaveNickname, setDidSaveNickname] = useState(false);
 
   const cleanedNickname = sanitizeNickname(nickname);
   const canContinue = hasUsableNickname(cleanedNickname);
+
+  function saveNickname() {
+    if (!canContinue) {
+      return;
+    }
+
+    setStoredNickname(cleanedNickname);
+    setDidSaveNickname(true);
+  }
+
+  function openMode(route: string) {
+    if (!canContinue) {
+      return;
+    }
+
+    saveNickname();
+    void navigate(route);
+  }
 
   return (
     <main className="px-4 pb-28 pt-10 sm:pb-16">
@@ -48,11 +69,12 @@ export default function HomePage() {
           <div className="grid gap-3 sm:grid-cols-2">
             {modeLinks.map((mode) => (
               <PrimaryButton
-                className="min-h-24 flex-col items-start text-left"
+                className="min-h-24 flex-col items-start text-left disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={!canContinue}
                 key={mode.to}
-                to={mode.to}
+                title={canContinue ? undefined : "Enter a nickname first"}
                 onClick={() => {
-                  setStoredNickname(cleanedNickname);
+                  openMode(mode.to);
                 }}
               >
                 <span className="text-base">{mode.title}</span>
@@ -71,7 +93,7 @@ export default function HomePage() {
           transition={{ duration: 0.3, ease: "easeOut" }}
           onSubmit={(event) => {
             event.preventDefault();
-            setStoredNickname(cleanedNickname);
+            saveNickname();
           }}
         >
           <label
@@ -93,7 +115,11 @@ export default function HomePage() {
           />
           <div className="mt-4 flex items-center justify-between gap-3">
             <p className="text-sm text-secondary-text">
-              {canContinue ? "Ready" : "Required"}
+              {didSaveNickname
+                ? `Saved as ${cleanedNickname}`
+                : canContinue
+                  ? "Ready"
+                  : "Required"}
             </p>
             <PrimaryButton disabled={!canContinue} type="submit">
               Save

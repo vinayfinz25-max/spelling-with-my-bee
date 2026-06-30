@@ -1,4 +1,10 @@
-import { createDailyPuzzle, type Puzzle } from "../../game";
+import {
+  createDailyPuzzle,
+  englishDictionary,
+  validateGuess,
+  type GuessResult,
+  type Puzzle
+} from "../../game";
 import { sanitizeNickname } from "../../lib/sanitize";
 import { getSupabaseClient } from "../../lib/supabase/client";
 
@@ -9,8 +15,22 @@ const maxCodeAttempts = 5;
 export type RoomRole = "player" | "spectator";
 
 export interface RoomActionResult {
+  readonly puzzle: Puzzle;
   readonly roomCode: string;
   readonly roomId: string;
+  readonly userId: string;
+}
+
+export interface RoomLeaderboardEntry {
+  readonly foundCount: number;
+  readonly nickname: string;
+  readonly score: number;
+  readonly userId: string;
+}
+
+export interface RoomSnapshot {
+  readonly foundWords: readonly string[];
+  readonly leaderboard: readonly RoomLeaderboardEntry[];
 }
 
 export type RoomErrorCode =
@@ -57,8 +77,30 @@ interface SupabaseMutationResponse {
 }
 
 interface RoomRecord {
+  readonly center_letter: string;
   readonly code: string;
+  readonly dictionary_version: string;
   readonly id: string;
+  readonly outer_letters: readonly string[];
+  readonly puzzle_date: string;
+}
+
+interface RoomMemberRow {
+  readonly nickname: string;
+  readonly role: RoomRole;
+  readonly user_id: string;
+}
+
+interface RoomGuessRow {
+  readonly created_at: string;
+  readonly points: number;
+  readonly user_id: string;
+  readonly word: string;
+}
+
+interface SupabaseListResponse<TData> {
+  readonly data: readonly TData[] | null;
+  readonly error: SupabaseError | null;
 }
 
 interface SupabaseRoomClient {
@@ -126,8 +168,10 @@ export async function createTroopRoom(
     await upsertRoomMember(client, room.id, user.id, nickname, "player");
 
     return {
+      puzzle,
       roomCode: room.code,
-      roomId: room.id
+      roomId: room.id,
+      userId: user.id
     };
   }
 
@@ -155,7 +199,9 @@ export async function joinTroopRoom(
   const nickname = getSafeNickname(input.nickname);
   const { data, error } = await client
     .from("rooms")
-    .select("id, code")
+    .select(
+      "id, code, puzzle_date, center_letter, outer_letters, dictionary_version"
+    )
     .eq("code", code)
     .maybeSingle();
 
@@ -179,9 +225,116 @@ export async function joinTroopRoom(
   );
 
   return {
+    puzzle: createPuzzleFromRoom(data),
     roomCode: data.code,
-    roomId: data.id
+    roomId: data.id,
+    userId: user.id
   };
+}
+
+export async function loadRoomSnapshot(
+  roomId: string,
+  currentUserId: string,
+  dependencies: RoomServiceDependencies = {}
+): Promise<RoomSnapshot> {
+  const client = getRoomClient(dependencies.client);
+  const [members, guesses] = await Promise.all([
+    loadRoomMembers(client, roomId),
+    loadRoomGuesses(client, roomId)
+  ]);
+
+  const nicknames = new Map(
+    members.map((member) => [member.user_id, member.nickname])
+  );
+  const totals = new Map<
+    string,
+    { foundCount: number; nickname: string; score: number; userId: string }
+  >();
+
+  for (const member of members) {
+    totals.set(member.user_id, {
+      foundCount: 0,
+      nickname: member.nickname,
+      score: 0,
+      userId: member.user_id
+    });
+  }
+
+  for (const guess of guesses) {
+    const current = totals.get(guess.user_id) ?? {
+      foundCount: 0,
+      nickname: nicknames.get(guess.user_id) ?? "Bee Friend",
+      score: 0,
+      userId: guess.user_id
+    };
+
+    totals.set(guess.user_id, {
+      ...current,
+      foundCount: current.foundCount + 1,
+      score: current.score + guess.points
+    });
+  }
+
+  return {
+    foundWords: guesses
+      .filter((guess) => guess.user_id === currentUserId)
+      .map((guess) => guess.word)
+      .sort(),
+    leaderboard: [...totals.values()].sort(
+      (first, second) =>
+        second.score - first.score ||
+        first.nickname.localeCompare(second.nickname)
+    )
+  };
+}
+
+export async function submitRoomGuess(
+  input: {
+    readonly foundWords: readonly string[];
+    readonly puzzle: Puzzle;
+    readonly roomId: string;
+    readonly userId: string;
+    readonly word: string;
+  },
+  dependencies: RoomServiceDependencies = {}
+): Promise<GuessResult> {
+  const result = await validateGuess(
+    input.puzzle,
+    input.word,
+    input.foundWords,
+    englishDictionary
+  );
+
+  if (result.status === "rejected") {
+    return result;
+  }
+
+  const client = getRoomClient(dependencies.client);
+  const guesses = client.from("room_guesses") as unknown as {
+    insert: (
+      payload: Record<string, unknown>
+    ) => Promise<SupabaseMutationResponse>;
+  };
+  const { error } = await guesses.insert({
+    points: result.points,
+    room_id: input.roomId,
+    user_id: input.userId,
+    word: result.word
+  });
+
+  if (error !== null) {
+    if (error.code === "23505") {
+      return {
+        status: "rejected",
+        word: result.word,
+        reason: "already-found"
+      };
+    }
+
+    throw toWriteError(error.message);
+  }
+
+  return result;
 }
 
 export function cleanRoomCode(value: string): string {
@@ -194,6 +347,13 @@ export function getRoomErrorMessage(error: unknown): string {
       return "Room play needs Supabase keys in Vercel before it can go live.";
     }
 
+    if (
+      error.code === "supabase-auth" &&
+      error.message.toLowerCase().includes("anonymous sign-ins are disabled")
+    ) {
+      return "Enable Anonymous sign-ins in Supabase Auth to use instant troop rooms.";
+    }
+
     return error.message;
   }
 
@@ -203,7 +363,8 @@ export function getRoomErrorMessage(error: unknown): string {
 function getRoomClient(
   injectedClient: SupabaseRoomClient | null | undefined
 ): SupabaseRoomClient {
-  const client = injectedClient === undefined ? getSupabaseClient() : injectedClient;
+  const client =
+    injectedClient === undefined ? getSupabaseClient() : injectedClient;
 
   if (client === null) {
     throw new RoomServiceError(
@@ -260,7 +421,9 @@ async function insertRoom(
       outer_letters: puzzle.outerLetters,
       puzzle_date: puzzle.date
     })
-    .select("id, code")
+    .select(
+      "id, code, puzzle_date, center_letter, outer_letters, dictionary_version"
+    )
     .single();
 
   if (error === null) {
@@ -272,6 +435,55 @@ async function insertRoom(
   }
 
   throw toWriteError(error.message);
+}
+
+async function loadRoomMembers(
+  client: SupabaseRoomClient,
+  roomId: string
+): Promise<readonly RoomMemberRow[]> {
+  const query = client.from("room_members") as unknown as {
+    select: (columns: string) => {
+      eq: (
+        column: string,
+        value: unknown
+      ) => Promise<SupabaseListResponse<RoomMemberRow>>;
+    };
+  };
+  const { data, error } = await query
+    .select("user_id, nickname, role")
+    .eq("room_id", roomId);
+
+  if (error !== null) {
+    throw toWriteError(error.message);
+  }
+
+  return data ?? [];
+}
+
+async function loadRoomGuesses(
+  client: SupabaseRoomClient,
+  roomId: string
+): Promise<readonly RoomGuessRow[]> {
+  const query = client.from("room_guesses") as unknown as {
+    select: (columns: string) => {
+      eq: (column: string, value: unknown) => {
+        order: (
+          column: string,
+          options: { readonly ascending: boolean }
+        ) => Promise<SupabaseListResponse<RoomGuessRow>>;
+      };
+    };
+  };
+  const { data, error } = await query
+    .select("user_id, word, points, created_at")
+    .eq("room_id", roomId)
+    .order("created_at", { ascending: false });
+
+  if (error !== null) {
+    throw toWriteError(error.message);
+  }
+
+  return data ?? [];
 }
 
 async function upsertRoomMember(
@@ -307,6 +519,21 @@ function generateRoomCode(): string {
   return Array.from(values, (value) => alphabet[value % alphabet.length]).join(
     ""
   );
+}
+
+function createPuzzleFromRoom(room: RoomRecord): Puzzle {
+  const centerLetter = room.center_letter.toLowerCase();
+  const outerLetters = room.outer_letters.map((letter) => letter.toLowerCase());
+  const letters = [centerLetter, ...outerLetters];
+
+  return {
+    centerLetter,
+    date: room.puzzle_date,
+    dictionaryVersion: room.dictionary_version,
+    id: `${room.puzzle_date}-${room.code}-${room.dictionary_version}`,
+    letters,
+    outerLetters
+  };
 }
 
 function toWriteError(message: string): RoomServiceError {

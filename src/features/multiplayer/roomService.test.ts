@@ -35,7 +35,12 @@ describe("roomService", () => {
       }
     );
 
-    expect(result).toEqual({ roomCode: "BEE42", roomId: "room-1" });
+    expect(result).toEqual({
+      puzzle: testPuzzle,
+      roomCode: "BEE42",
+      roomId: "room-1",
+      userId: "user-1"
+    });
     expect(client.calls).toEqual([
       {
         payload: {
@@ -108,7 +113,15 @@ describe("roomService", () => {
       { client }
     );
 
-    expect(result).toEqual({ roomCode: "HIVE7", roomId: "room-1" });
+    expect(result).toMatchObject({
+      roomCode: "HIVE7",
+      roomId: "room-1",
+      userId: "user-1"
+    });
+    expect(result.puzzle).toMatchObject({
+      centerLetter: "e",
+      outerLetters: ["a", "b", "c", "d", "f", "g"]
+    });
     expect(client.calls.at(-1)).toEqual({
       payload: {
         nickname: "Buzz Boss",
@@ -196,7 +209,7 @@ function createFakeRoomClient(options: FakeRoomClientOptions = {}) {
               }
 
               return Promise.resolve({
-                data: { code, id: "room-1" },
+                data: createRoomRecord(code),
                 error: null
               });
             }
@@ -207,10 +220,7 @@ function createFakeRoomClient(options: FakeRoomClientOptions = {}) {
         eq: (_column: string, value: unknown) => ({
           maybeSingle: () =>
             Promise.resolve({
-              data: {
-                code: typeof value === "string" ? value : "",
-                id: "room-1"
-              },
+              data: createRoomRecord(typeof value === "string" ? value : ""),
               error: null
             })
         })
@@ -221,5 +231,16 @@ function createFakeRoomClient(options: FakeRoomClientOptions = {}) {
         return Promise.resolve({ error: null });
       }
     })
+  };
+}
+
+function createRoomRecord(code: string) {
+  return {
+    center_letter: "e",
+    code,
+    dictionary_version: "test",
+    id: "room-1",
+    outer_letters: ["a", "b", "c", "d", "f", "g"],
+    puzzle_date: "2026-06-30"
   };
 }
