@@ -41,8 +41,7 @@ export default function HomePage() {
               Spelling with my bee
             </h1>
             <p className="max-w-2xl text-lg leading-8 text-secondary-text">
-              Open the door, pick a name, and jump into the day&apos;s puzzle or
-              a friends-only troop.
+              who tf pays for wordle ???
             </p>
           </motion.div>
 
